@@ -904,14 +904,24 @@ class PgConnection:
         self.conn = psycopg2.connect(dsn, cursor_factory=DictCursor)
         self.conn.autocommit = True
         
+    @staticmethod
+    def _convert_query(query):
+        """Convert SQLite ? placeholders to PostgreSQL %s without breaking existing % or %s."""
+        # If the query already contains %s placeholders, assume it's already PostgreSQL-ready
+        if '%s' in query:
+            return query
+        # Otherwise convert ? to %s and escape any literal % (e.g. in LIKE patterns)
+        return query.replace('%', '%%').replace('?', '%s')
+
     def execute(self, query, params=()):
-        query = query.replace("%", "%%").replace("?", "%s")
+        query = self._convert_query(query)
         cur = self.conn.cursor()
         cur.execute(query, params)
         return cur
         
     def executescript(self, script):
         script = script.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        script = script.replace("INSERT OR IGNORE", "INSERT")
         cur = self.conn.cursor()
         cur.execute(script)
 
@@ -1306,7 +1316,7 @@ def list_patients(doctor_id: int, search: str = "") -> list[dict]:
             FROM patients p
             LEFT JOIN scans s ON s.patient_id = p.id
             WHERE p.doctor_id = ?
-              AND (? = '%%' OR p.name LIKE ? OR p.id LIKE ? OR p.mrn LIKE ?)
+              AND (? = '%' OR p.name LIKE ? OR p.id LIKE ? OR p.mrn LIKE ?)
             GROUP BY p.id
             ORDER BY p.updated_at DESC
             """,
@@ -1684,11 +1694,12 @@ def migrate_workspace_for_doctor(doctor_id: int) -> None:
                 allowed_patient_ids.add(row["id"])
                 target.execute(
                     """
-                    INSERT OR IGNORE INTO patients (
+                    INSERT INTO patients (
                         id, doctor_id, mrn, name, age, sex, phone, risk_level,
                         clinical_notes, created_at, updated_at
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (id) DO NOTHING
                     """,
                     (
                         row["id"],
@@ -1712,12 +1723,13 @@ def migrate_workspace_for_doctor(doctor_id: int) -> None:
                     continue
                 target.execute(
                     """
-                    INSERT OR IGNORE INTO scans (
+                    INSERT INTO scans (
                         id, patient_id, doctor_id, modality, original_filename, original_path,
                         prediction_path, top_label, confidence, status, summary_headline,
                         summary_details, detections_json, confidence_threshold, created_at
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (id) DO NOTHING
                     """,
                     (
                         row["id"],
@@ -1756,11 +1768,12 @@ def migrate_legacy_json_to_workspace(doctor_id: int) -> None:
             patient_id = record.get("id") or new_patient_id()
             conn.execute(
                 """
-                INSERT OR IGNORE INTO patients (
+                INSERT INTO patients (
                     id, doctor_id, mrn, name, age, sex, phone, risk_level,
                     clinical_notes, created_at, updated_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING
                 """,
                 (
                     patient_id,
@@ -1783,12 +1796,13 @@ def migrate_legacy_json_to_workspace(doctor_id: int) -> None:
                 scan_id = new_scan_id()
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO scans (
+                    INSERT INTO scans (
                         id, patient_id, doctor_id, modality, original_filename, original_path,
                         prediction_path, top_label, confidence, status, summary_headline,
                         summary_details, detections_json, confidence_threshold, created_at
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (id) DO NOTHING
                     """,
                     (
                         scan_id,
