@@ -1,0 +1,33 @@
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and Editor folders
+.vscode/
+.idea/
+
+# Streamlit Secrets (CRITICAL: Never commit your secrets!)
+.streamlit/secrets.toml
+
+# Local Data and SQLite Databases
+patient_data/
+*.db
+*.sqlite3
+
+# One-off scripts
+migrate_to_pg.py
+migrate_data.py
+testmodel.py
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Trashes
