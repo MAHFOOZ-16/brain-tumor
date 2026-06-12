@@ -941,9 +941,12 @@ class PgConnection:
 
 def get_connection():
     ensure_storage()
-    # Read from secrets.toml via Streamlit
     import streamlit as st
     dsn = st.secrets["database"]["url"]
+    # Supabase requires SSL — append sslmode=require if not already present
+    if "sslmode" not in dsn:
+        sep = "&" if "?" in dsn else "?"
+        dsn = f"{dsn}{sep}sslmode=require"
     return PgConnection(dsn)
 
 
