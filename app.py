@@ -902,6 +902,7 @@ def ensure_storage() -> None:
 @st.cache_resource(show_spinner=False)
 def get_db_pool(host, port, dbname, user, password, sslmode, connect_timeout):
     from psycopg2.pool import ThreadedConnectionPool
+    from psycopg2.extras import DictCursor
     return ThreadedConnectionPool(
         minconn=1,
         maxconn=20,
@@ -912,6 +913,7 @@ def get_db_pool(host, port, dbname, user, password, sslmode, connect_timeout):
         password=password,
         sslmode=sslmode,
         connect_timeout=connect_timeout,
+        cursor_factory=DictCursor,
     )
 
 
@@ -938,14 +940,16 @@ class PgConnection:
 
     def execute(self, query, params=()):
         query = self._convert_query(query)
-        cur = self.conn.cursor()
+        from psycopg2.extras import DictCursor
+        cur = self.conn.cursor(cursor_factory=DictCursor)
         cur.execute(query, params)
         return cur
         
     def executescript(self, script):
         script = script.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
         script = script.replace("INSERT OR IGNORE", "INSERT")
-        cur = self.conn.cursor()
+        from psycopg2.extras import DictCursor
+        cur = self.conn.cursor(cursor_factory=DictCursor)
         # psycopg2 does not support multiple statements in a single execute() call,
         # so split on ';' and run each statement individually.
         for statement in script.split(";"):
