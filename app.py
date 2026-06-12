@@ -900,8 +900,10 @@ def ensure_storage() -> None:
 
 
 class PgConnection:
-    def __init__(self, dsn):
-        self.conn = psycopg2.connect(dsn, cursor_factory=DictCursor)
+    def __init__(self, **kwargs):
+        """Connect using explicit keyword arguments so passwords with special
+        characters (e.g. @ encoded as %40) are passed as plain strings."""
+        self.conn = psycopg2.connect(cursor_factory=DictCursor, **kwargs)
         self.conn.autocommit = True
         
     @staticmethod
@@ -940,14 +942,24 @@ class PgConnection:
         pass
 
 def get_connection():
+    """Build an explicit psycopg2 connection from the Supabase URL stored in
+    Streamlit secrets. Parsing the URL manually ensures that URL-encoded
+    characters in the password (e.g. %40 → @) are decoded correctly, and that
+    SSL is always enabled for Supabase."""
+    from urllib.parse import urlparse, unquote
     ensure_storage()
     import streamlit as st
-    dsn = st.secrets["database"]["url"]
-    # Supabase requires SSL — append sslmode=require if not already present
-    if "sslmode" not in dsn:
-        sep = "&" if "?" in dsn else "?"
-        dsn = f"{dsn}{sep}sslmode=require"
-    return PgConnection(dsn)
+    raw_url = st.secrets["database"]["url"]
+    p = urlparse(raw_url)
+    return PgConnection(
+        host=p.hostname,
+        port=p.port or 5432,
+        dbname=(p.path or "/postgres").lstrip("/"),
+        user=unquote(p.username or ""),
+        password=unquote(p.password or ""),
+        sslmode="require",
+        connect_timeout=10,
+    )
 
 
 def init_db() -> None:
