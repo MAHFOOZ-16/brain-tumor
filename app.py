@@ -943,21 +943,21 @@ class PgConnection:
 
 def get_connection():
     """Build a psycopg2 connection to the Supabase PostgreSQL database.
-    Tries multiple credential sources to be resilient against Streamlit
-    secrets parsing quirks."""
+    Uses port 6543 (Supabase connection pooler / Supavisor) which is
+    accessible from cloud environments like Streamlit Cloud.
+    Port 5432 (direct DB) is blocked from most cloud platforms."""
     from urllib.parse import urlparse, unquote
     ensure_storage()
     import streamlit as st
 
     # --- Resolve connection parameters ---
-    host = port = dbname = user = password = None
+    host = dbname = user = password = None
 
     # Method 1: parse the URL from secrets
     try:
         raw_url = st.secrets["database"]["url"]
         p = urlparse(raw_url.strip())
         host = p.hostname
-        port = p.port or 5432
         dbname = (p.path or "/postgres").lstrip("/") or "postgres"
         user = unquote(p.username or "")
         password = unquote(p.password or "")
@@ -968,7 +968,6 @@ def get_connection():
     if not host:
         try:
             host = st.secrets["database"]["host"]
-            port = int(st.secrets["database"].get("port", 5432))
             dbname = st.secrets["database"].get("dbname", "postgres")
             user = st.secrets["database"].get("user", "postgres")
             password = st.secrets["database"].get("password", "")
@@ -978,15 +977,16 @@ def get_connection():
     # Method 3: hardcoded fallback (the known Supabase credentials)
     if not host:
         host = "db.fluafavdyhciipfahtuv.supabase.co"
-        port = 5432
         dbname = "postgres"
         user = "postgres"
         password = "BRAINTUMOR@123"
 
+    # Always use port 6543 (Supabase pooler) — port 5432 is unreachable
+    # from Streamlit Cloud and most cloud platforms.
     try:
         return PgConnection(
             host=host,
-            port=port,
+            port=6543,
             dbname=dbname,
             user=user,
             password=password,
