@@ -942,60 +942,39 @@ class PgConnection:
         pass
 
 def get_connection():
-    """Build a psycopg2 connection to the Supabase PostgreSQL database.
-    Uses port 6543 (Supabase connection pooler / Supavisor) which is
-    accessible from cloud environments like Streamlit Cloud.
-    Port 5432 (direct DB) is blocked from most cloud platforms."""
+    """Connect to Supabase PostgreSQL via the connection pooler.
+    The pooler hostname (aws-...) resolves to IPv4, which is required
+    because Streamlit Cloud does not support IPv6."""
     from urllib.parse import urlparse, unquote
     ensure_storage()
     import streamlit as st
 
-    # --- Resolve connection parameters ---
-    host = dbname = user = password = None
-
-    # Method 1: parse the URL from secrets
+    # Try to read the pooler URL from Streamlit secrets
     try:
         raw_url = st.secrets["database"]["url"]
         p = urlparse(raw_url.strip())
-        host = p.hostname
-        dbname = (p.path or "/postgres").lstrip("/") or "postgres"
-        user = unquote(p.username or "")
-        password = unquote(p.password or "")
-    except Exception:
-        pass
-
-    # Method 2: individual keys in secrets (fallback)
-    if not host:
-        try:
-            host = st.secrets["database"]["host"]
-            dbname = st.secrets["database"].get("dbname", "postgres")
-            user = st.secrets["database"].get("user", "postgres")
-            password = st.secrets["database"].get("password", "")
-        except Exception:
-            pass
-
-    # Method 3: hardcoded fallback (the known Supabase credentials)
-    if not host:
-        host = "db.fluafavdyhciipfahtuv.supabase.co"
-        dbname = "postgres"
-        user = "postgres"
-        password = "BRAINTUMOR@123"
-
-    # Always use port 6543 (Supabase pooler) — port 5432 is unreachable
-    # from Streamlit Cloud and most cloud platforms.
-    try:
         return PgConnection(
-            host=host,
-            port=6543,
-            dbname=dbname,
-            user=user,
-            password=password,
+            host=p.hostname,
+            port=p.port or 6543,
+            dbname=(p.path or "/postgres").lstrip("/") or "postgres",
+            user=unquote(p.username or ""),
+            password=unquote(p.password or ""),
             sslmode="require",
             connect_timeout=10,
         )
-    except Exception as exc:
-        st.error(f"Database connection failed: {exc}")
-        raise
+    except Exception:
+        pass
+
+    # Fallback: use the known pooler credentials directly
+    return PgConnection(
+        host="aws-1-eu-north-1.pooler.supabase.com",
+        port=6543,
+        dbname="postgres",
+        user="postgres.fluafavdyhciipfahtuv",
+        password="BRAINTUMOR@123",
+        sslmode="require",
+        connect_timeout=10,
+    )
 
 
 def init_db() -> None:
