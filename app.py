@@ -899,11 +899,32 @@ def ensure_storage() -> None:
 
 
 
+@st.cache_resource(show_spinner=False)
+def get_db_pool(host, port, dbname, user, password, sslmode, connect_timeout):
+    from psycopg2.pool import ThreadedConnectionPool
+    return ThreadedConnectionPool(
+        minconn=1,
+        maxconn=20,
+        host=host,
+        port=port,
+        dbname=dbname,
+        user=user,
+        password=password,
+        sslmode=sslmode,
+        connect_timeout=connect_timeout,
+    )
+
+
 class PgConnection:
-    def __init__(self, **kwargs):
-        """Connect using explicit keyword arguments so passwords with special
-        characters (e.g. @ encoded as %40) are passed as plain strings."""
-        self.conn = psycopg2.connect(cursor_factory=DictCursor, **kwargs)
+    def __init__(self, pool):
+        self.pool = pool
+        self.conn = pool.getconn()
+        if self.conn.closed:
+            try:
+                pool.putconn(self.conn, close=True)
+            except Exception:
+                pass
+            self.conn = pool.getconn()
         self.conn.autocommit = True
         
     @staticmethod
@@ -933,18 +954,22 @@ class PgConnection:
                 cur.execute(stmt)
 
     def close(self):
-        self.conn.close()
-        
+        if self.conn and self.pool:
+            try:
+                self.pool.putconn(self.conn)
+            except Exception:
+                pass
+            self.conn = None
+
     def __enter__(self):
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
+        self.close()
+
 
 def get_connection():
-    """Connect to Supabase PostgreSQL via the connection pooler.
-    The pooler hostname (aws-...) resolves to IPv4, which is required
-    because Streamlit Cloud does not support IPv6."""
+    """Get a connection from the global pool to Supabase PostgreSQL."""
     from urllib.parse import urlparse, unquote
     ensure_storage()
     import streamlit as st
@@ -953,7 +978,7 @@ def get_connection():
     try:
         raw_url = st.secrets["database"]["url"]
         p = urlparse(raw_url.strip())
-        return PgConnection(
+        pool = get_db_pool(
             host=p.hostname,
             port=p.port or 6543,
             dbname=(p.path or "/postgres").lstrip("/") or "postgres",
@@ -962,11 +987,12 @@ def get_connection():
             sslmode="require",
             connect_timeout=10,
         )
+        return PgConnection(pool)
     except Exception:
         pass
 
     # Fallback: use the known pooler credentials directly
-    return PgConnection(
+    pool = get_db_pool(
         host="aws-1-eu-north-1.pooler.supabase.com",
         port=6543,
         dbname="postgres",
@@ -975,6 +1001,8 @@ def get_connection():
         sslmode="require",
         connect_timeout=10,
     )
+    return PgConnection(pool)
+
 
 
 def init_db() -> None:
@@ -1672,7 +1700,10 @@ def dashboard_stats(doctor_id: int) -> dict:
 
 
 def repair_workspace_confidentiality(doctor_id: int) -> None:
-    doctor = get_doctor(doctor_id) or {}
+    if "doctor" in st.session_state and st.session_state.doctor and int(st.session_state.doctor.get("id")) == doctor_id:
+        doctor = st.session_state.doctor
+    else:
+        doctor = get_doctor(doctor_id) or {}
     email = normalized_identity(doctor.get("email"))
     if email == DEFAULT_DOCTOR_EMAIL:
         return
@@ -1714,10 +1745,16 @@ def repair_workspace_confidentiality(doctor_id: int) -> None:
 
 def migrate_workspace_for_doctor(doctor_id: int) -> None:
     paths = ensure_doctor_workspace(doctor_id)
-    doctor = get_doctor(doctor_id) or {}
     if paths["migration_flag"].exists():
-        repair_workspace_confidentiality(doctor_id)
+        if not st.session_state.get(f"workspace_repaired_{doctor_id}"):
+            repair_workspace_confidentiality(doctor_id)
+            st.session_state[f"workspace_repaired_{doctor_id}"] = True
         return
+
+    if "doctor" in st.session_state and st.session_state.doctor and int(st.session_state.doctor.get("id")) == doctor_id:
+        doctor = st.session_state.doctor
+    else:
+        doctor = get_doctor(doctor_id) or {}
 
     copied_patients = 0
     allowed_patient_ids: set[str] = set()
@@ -1789,6 +1826,7 @@ def migrate_workspace_for_doctor(doctor_id: int) -> None:
         migrate_legacy_json_to_workspace(doctor_id)
 
     repair_workspace_confidentiality(doctor_id)
+    st.session_state[f"workspace_repaired_{doctor_id}"] = True
     paths["migration_flag"].write_text(now_iso(), encoding="utf-8")
 
 
@@ -2593,8 +2631,13 @@ def dashboard(doctor: dict) -> None:
 def main() -> None:
     st.set_page_config(page_title="NeuroDesk", layout="wide", initial_sidebar_state="collapsed")
     ensure_storage()
-    init_db()
-    ensure_demo_doctor()
+    
+    # Run DB migration and demo doctor setup only once per session to reduce latency
+    if not st.session_state.get("db_initialized"):
+        init_db()
+        ensure_demo_doctor()
+        st.session_state.db_initialized = True
+        
     reset_session_on_upgrade()
     page_style()
     render_neural_background()
@@ -2603,7 +2646,12 @@ def main() -> None:
         auth_view()
         return
 
-    doctor = get_doctor(st.session_state.get("doctor_id"))
+    # Cache the doctor profile in session state to avoid querying the DB on every single user click
+    doctor_id = st.session_state.get("doctor_id")
+    if "doctor" not in st.session_state or st.session_state.doctor is None or st.session_state.doctor.get("id") != doctor_id:
+        st.session_state.doctor = get_doctor(doctor_id)
+
+    doctor = st.session_state.doctor
     if not doctor:
         sign_out()
         return
