@@ -923,7 +923,12 @@ class PgConnection:
         script = script.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
         script = script.replace("INSERT OR IGNORE", "INSERT")
         cur = self.conn.cursor()
-        cur.execute(script)
+        # psycopg2 does not support multiple statements in a single execute() call,
+        # so split on ';' and run each statement individually.
+        for statement in script.split(";"):
+            stmt = statement.strip()
+            if stmt:
+                cur.execute(stmt)
 
     def close(self):
         self.conn.close()
